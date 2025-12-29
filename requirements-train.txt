@@ -1,0 +1,12 @@
+torch
+transformers
+datasets
+peft
+accelerate
+bitsandbytes
+sentencepiece
+evaluate
+safetensors
+protobuf
+sentence-transformers
+faiss-cpu

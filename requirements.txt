@@ -1,0 +1,55 @@
+# # -----------------------
+# # Core ML (mT5 + LoRA)
+# # -----------------------
+# torch
+# transformers
+# datasets
+# peft
+# accelerate
+# sentencepiece
+# evaluate
+# safetensors
+# protobuf
+
+
+# # -----------------------
+# # Data + PDF extraction
+# # -----------------------
+# numpy
+# pandas
+# tqdm
+# pdfplumber
+# regex
+# unidecode
+
+# # -----------------------
+# # Flask API
+# # -----------------------
+# Flask
+# flask-cors
+# python-dotenv
+# gunicorn
+
+# # -----------------------
+# # PostgreSQL + migrations
+# # -----------------------
+# SQLAlchemy
+# psycopg2-binary
+# alembic
+# Flask-SQLAlchemy
+# Flask-Migrate
+
+# # -----------------------
+# # RAG (optional, later)
+# # -----------------------
+# sentence-transformers
+# faiss-cpu
+# # chromadb
+
+# # -----------------------
+# # Dev tools (optional)
+# # -----------------------
+# pytest
+# black
+# isort
+# flake8

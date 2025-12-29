@@ -205,3 +205,38 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+venv/
+
+# -------------------------
+# AI-LMS / AI-Tutor data (DO NOT COMMIT)
+# -------------------------
+data/raw/
+data/extracted/
+data/cleaned/
+data/parsed/
+data/rag_index/
+
+# Processed SFT outputs (too large)
+data/processed/sft/*.jsonl
+
+# If you ever accidentally generate another SFT folder
+data/sft/
+
+# Optional: logs / temp
+*.log
+tmp/
+temp/
+
+# Project data
+data/
+
+# Virtual environments
+venv_backend/
+venv_data/
+venv_train/
+
+# Temp files
+*.png
+

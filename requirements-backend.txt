@@ -1,0 +1,10 @@
+Flask
+flask-cors
+python-dotenv
+gunicorn
+SQLAlchemy
+psycopg2-binary
+alembic
+Flask-SQLAlchemy
+Flask-Migrate
+pydantic
