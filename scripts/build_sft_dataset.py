@@ -38,9 +38,9 @@ TOPIC_LABELS = [
 # Build both tasks?
 INCLUDE_TOPIC_CLASSIFY = True
 
-# Limits (increase later)
-MAX_TUTOR_SAMPLES = 1200
-MAX_CLASSIFY_SAMPLES = 1200
+# ✅ FULL DATASET: no caps
+MAX_TUTOR_SAMPLES = None
+MAX_CLASSIFY_SAMPLES = None
 
 # ✅ Full combination (includes past_papers now)
 ALLOW_TUTOR_DOC_TYPES = {
@@ -98,6 +98,55 @@ def pick_topic_label(topic_guess: Optional[str]) -> Optional[str]:
     t = mapping.get(topic_guess, topic_guess)
     return t if t in TOPIC_LABELS else None
 
+def correct_topic_label(topic_guess: Optional[str], text: str, source_file: str = "") -> Optional[str]:
+    """
+    PP1-safe heuristic correction for obvious topic mislabels.
+    Goal: fix clear mistakes (e.g., mechanics experiments labeled as electricity),
+    without trying to perfectly classify everything.
+    """
+    if not text:
+        return topic_guess
+
+    t = (text or "").lower()
+    sf = (source_file or "").lower()
+
+    # --- Mechanics (forces, vectors, elasticity) ---
+    mechanics_kw = [
+        "parallelogram of forces", "resultant", "vector", "equilibrium",
+        "newton", "force", "forces", "moment", "torque", "work", "energy",
+        "young's modulus", "youngs modulus", "stress", "strain", "elastic",
+        "hooke", "tensile", "extension", "wire", "rigid support"
+    ]
+    if any(k in t for k in mechanics_kw):
+        return "Mechanics"
+
+    # --- Measurements (used as practical/thermal bucket in your 6-topic taxonomy) ---
+    measurements_kw = [
+        "heat", "temperature", "reservoir", "thermal", "conduction", "insulated",
+        "vernier", "micrometer", "screw gauge", "meter ruler", "uncertainty",
+        "percentage of error", "calibration", "readings", "scale used"
+    ]
+    if any(k in t for k in measurements_kw) or "practical handbook" in sf:
+        return "Measurements"
+
+    # --- Waves ---
+    waves_kw = ["wave", "frequency", "wavelength", "interference", "diffraction", "standing wave", "sound"]
+    if any(k in t for k in waves_kw):
+        return "Waves"
+
+    # --- Magnetism ---
+    magnetism_kw = ["magnetic", "flux density", "tesla", "lorentz", "solenoid", "electromagnet", "field due to current"]
+    if any(k in t for k in magnetism_kw):
+        return "Magnetism"
+
+    # --- Modern Physics ---
+    modern_kw = ["radioactive", "decay", "half-life", "half life", "photoelectric", "photon", "nuclear", "atomic", "electron volt"]
+    if any(k in t for k in modern_kw):
+        return "Modern Physics"
+
+    # fallback to original guess
+    return topic_guess
+
 def make_id(prefix: str, rel_file: str, extra: str) -> str:
     base = re.sub(r"[^a-zA-Z0-9]+", "_", rel_file).strip("_")
     extra2 = re.sub(r"[^a-zA-Z0-9]+", "_", extra).strip("_")
@@ -119,7 +168,7 @@ def build_from_past_paper(rec: dict) -> List[dict]:
     out = []
     file = rec.get("file", "")
     doc_type = rec.get("doc_type", "")
-    topic = pick_topic_label(rec.get("topic_guess"))
+    raw_topic = pick_topic_label(rec.get("topic_guess"))
     questions = rec.get("content", {}).get("questions", []) or []
 
     for q in questions:
@@ -129,6 +178,11 @@ def build_from_past_paper(rec: dict) -> List[dict]:
 
         if not prompt:
             continue
+
+        # ✅ fix topic per question prompt (PP1-safe)
+        topic = correct_topic_label(raw_topic, prompt, file)
+        if topic not in TOPIC_LABELS:
+            topic = None
 
         inp_lines = [f"Question {q_no}: {prompt}"] if q_no is not None else [prompt]
         if subs:
@@ -141,7 +195,6 @@ def build_from_past_paper(rec: dict) -> List[dict]:
 
         inp = normalize_ws("\n".join(inp_lines))
 
-        # Tutoring-style output skeleton (still useful for SFT pipeline + tutoring behavior)
         out_text = normalize_ws(
             "1) Theory:\n"
             "- State the relevant physics principle and define key terms.\n\n"
@@ -181,13 +234,18 @@ def build_from_marking_scheme(rec: dict) -> List[dict]:
     out = []
     file = rec.get("file", "")
     doc_type = rec.get("doc_type", "")
-    topic = pick_topic_label(rec.get("topic_guess"))
+    raw_topic = pick_topic_label(rec.get("topic_guess"))
 
     text_blocks = rec.get("content", {}).get("mark_mentions", []) or []
     for m in text_blocks:
         line = (m.get("text") or "").strip()
         if len(line) < 30:
             continue
+
+        # ✅ fix topic per line (PP1-safe)
+        topic = correct_topic_label(raw_topic, line, file)
+        if topic not in TOPIC_LABELS:
+            topic = None
 
         inp = normalize_ws(
             "Explain this marking-scheme step in a student-friendly way and why it is correct:\n"
@@ -225,13 +283,18 @@ def build_from_blocks(rec: dict) -> List[dict]:
     out = []
     file = rec.get("file", "")
     doc_type = rec.get("doc_type", "")
-    topic = pick_topic_label(rec.get("topic_guess"))
+    raw_topic = pick_topic_label(rec.get("topic_guess"))
 
     blocks = rec.get("content", {}).get("blocks", []) or []
     for idx, b in enumerate(blocks, start=1):
         b = normalize_ws(b)
         if len(b) < 350:
             continue
+
+        # ✅ fix topic per block (PP1-safe)
+        topic = correct_topic_label(raw_topic, b, file)
+        if topic not in TOPIC_LABELS:
+            topic = None
 
         inp = normalize_ws(
             "Teach this A/L Physics content clearly with theory + equations + an example + practical relevance:\n\n"
@@ -344,16 +407,18 @@ def main():
         else:
             tutor_samples.extend(build_from_blocks(rec))
 
-    # Shuffle + cap
+    # Shuffle + optional cap (✅ cap disabled when MAX_TUTOR_SAMPLES=None)
     random.shuffle(tutor_samples)
-    tutor_samples = tutor_samples[:MAX_TUTOR_SAMPLES]
+    if MAX_TUTOR_SAMPLES:
+        tutor_samples = tutor_samples[:MAX_TUTOR_SAMPLES]
 
     all_samples = list(tutor_samples)
 
     if INCLUDE_TOPIC_CLASSIFY:
         cls_samples = build_topic_classify_from_tutor(tutor_samples)
         random.shuffle(cls_samples)
-        cls_samples = cls_samples[:MAX_CLASSIFY_SAMPLES]
+        if MAX_CLASSIFY_SAMPLES:
+            cls_samples = cls_samples[:MAX_CLASSIFY_SAMPLES]
         all_samples.extend(cls_samples)
 
     random.shuffle(all_samples)
@@ -362,12 +427,10 @@ def main():
         print("⚠️ No samples created. Check doc_type values and parsed content structure.")
         return
 
-    # Split
     splits = split_train_valid_test(all_samples)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Write JSONL
     def write_jsonl(path: Path, rows: List[dict]):
         with path.open("w", encoding="utf-8") as f:
             for r in rows:
@@ -377,7 +440,6 @@ def main():
     write_jsonl(VALID_PATH, splits["valid"])
     write_jsonl(TEST_PATH, splits["test"])
 
-    # Manifest
     def count_task(rows: List[dict], task: str) -> int:
         return sum(1 for x in rows if x.get("task") == task)
 
@@ -400,12 +462,12 @@ def main():
             "topic_classify": count_task(all_samples, "topic_classify"),
         },
         "parsed_file_doc_type_counts": source_counts,
-        "note": "Tutoring-first dataset with theory + equations + practical relevance. Past papers included as prompts (answers are structured tutoring outputs; exact marking-scheme matching can be added later)."
+        "note": "FULL dataset build (no sampling caps). Includes PP1-safe heuristic topic correction (fixes obvious mislabels). Tutoring-first with theory + equations + practical relevance."
     }
 
     MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print("\n✅ SFT dataset build complete (combined sources, tutoring-first).")
+    print("\n✅ SFT dataset build complete (FULL dataset, no caps).")
     print(f"   Total samples : {manifest['counts']['total']}")
     print(f"   Train         : {manifest['counts']['train']}  -> {TRAIN_PATH.as_posix()}")
     print(f"   Valid         : {manifest['counts']['valid']}  -> {VALID_PATH.as_posix()}")
@@ -413,7 +475,7 @@ def main():
     print(f"   Tutoring      : {manifest['counts']['physics_tutoring']}")
     print(f"   Topic classify: {manifest['counts']['topic_classify']}")
     print(f"   Manifest      : {MANIFEST_PATH.as_posix()}")
-    print("\nTip: Main focus is always theory + practical explanation style tutoring.")
+    print("\nTip: Topic labels are corrected for obvious cases; full topic coverage depends on source PDFs.")
 
 if __name__ == "__main__":
     main()
