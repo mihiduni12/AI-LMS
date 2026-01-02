@@ -1,0 +1,43 @@
+# training/configs/mt5_small_lora.yaml
+
+base_model_name_or_path: google/mt5-small
+
+train_file: data/processed/sft/train.jsonl
+eval_file: data/processed/sft/valid.jsonl
+
+# For Colab, later change this to:
+# output_dir: /content/drive/MyDrive/mt5-small-lora-pp1
+output_dir: runs/mt5-small-lora-pp1
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["q", "v"]
+
+training:
+  max_steps: 1200
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 2.0e-4
+  warmup_steps: 80
+  weight_decay: 0.0
+  logging_steps: 25
+  eval_steps: 200
+  save_steps: 200
+  save_total_limit: 3
+  max_grad_norm: 1.0
+
+  max_source_length: 512
+  max_target_length: 256
+
+  fp16: true
+  gradient_checkpointing: true
+
+  resume_from_checkpoint: true
+
+dataset_format:
+  instruction_key: instruction
+  input_key: input
+  output_key: output
