@@ -2,12 +2,18 @@
 
 base_model_name_or_path: google/mt5-small
 
-train_file: data/processed/sft/train.jsonl
-eval_file: data/processed/sft/valid.jsonl
+# # ✅ Drive paths (important)
+train_file: /content/drive/MyDrive/AI-LMS/data/processed/sft/train.jsonl
+eval_file: /content/drive/MyDrive/AI-LMS/data/processed/sft/valid.jsonl
 
-# In Colab, prefer saving to Google Drive to avoid losing outputs on disconnect:
-# output_dir: /content/drive/MyDrive/mt5-small-lora-pp1
-output_dir: runs/mt5-small-lora-pp1
+# #Mini version
+# train_file: /content/drive/MyDrive/AI-LMS/mini_train.jsonl
+# eval_file: /content/drive/MyDrive/AI-LMS/mini_train.jsonl
+
+
+# ✅ Save outputs to Drive (important)
+output_dir: /content/drive/MyDrive/AI-LMS/runs/mt5-small-lora-pp1
+# output_dir: /content/drive/MyDrive/AI-LMS/runs/mt5-small-lora-mini-demo
 
 dataset_format:
   instruction_key: instruction
@@ -18,33 +24,45 @@ lora:
   r: 16
   alpha: 32
   dropout: 0.05
-  # For mT5 this often works. If you get "target modules not found", change to ["q","k","v","o"]
   target_modules: ["q", "v"]
 
 training:
-  max_steps: 1200
+  # max_steps: 400
+  max_steps: 200
 
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 16
 
-  learning_rate: 2.0e-4
+  # ✅ Stability fix: lower LR (was 2.0e-4)
+  learning_rate: 5.0e-5
+
   warmup_steps: 80
   weight_decay: 0.0
   max_grad_norm: 1.0
 
   logging_steps: 25
-  eval_steps: 200
-  save_steps: 200
+
+  # ✅ Evaluate + save less often (reduces GPU spikes)
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_steps: 100
+
+  # ✅ Prevent eval OOM by accumulating on CPU
+  eval_accumulation_steps: 8
+
   save_total_limit: 3
 
   max_source_length: 512
   max_target_length: 256
 
-  fp16: true
-  gradient_checkpointing: true
-  resume_from_checkpoint: true
+  # ✅ Stability fix: turn off fp16 (was true)
+  fp16: false
 
-  # Metrics / generation during evaluation
-  predict_with_generate: true
+  gradient_checkpointing: true
+
+  # ✅ Recommended for NaN fix: start clean (set true later if needed)
+  resume_from_checkpoint: false
+
+  # ✅ Decoding (used for prediction generation)
   num_beams: 2

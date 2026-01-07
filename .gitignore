@@ -57,19 +57,6 @@ temp/
 .ropeproject
 
 # =====================================================
-# AI-LMS / AI-Tutor DATA (DO NOT COMMIT)
-# =====================================================
-data/raw/
-data/extracted/
-data/cleaned/
-data/parsed/
-data/rag_index/
-
-# Processed datasets (SFT / training outputs)
-data/processed/
-data/sft/
-
-# =====================================================
 # Models & checkpoints
 # =====================================================
 checkpoints/
@@ -92,3 +79,16 @@ models/
 # =====================================================
 .DS_Store
 Thumbs.db
+
+# =====================================================
+# Ignore all data by default
+# =====================================================
+data/**
+
+# =====================================================
+# Allow ONLY processed SFT data
+# =====================================================
+!data/
+!data/processed/
+!data/processed/sft/
+!data/processed/sft/**

@@ -3,9 +3,8 @@ import os
 import glob
 import json
 import argparse
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
-import numpy as np
 import matplotlib.pyplot as plt
 
 from datasets import load_dataset
@@ -20,10 +19,10 @@ from transformers import (
 
 from peft import LoraConfig, get_peft_model, TaskType
 
-# Metrics
-import evaluate
 
-
+# -----------------------------
+# Utils
+# -----------------------------
 def load_yaml(path: str) -> Dict[str, Any]:
     import yaml
     with open(path, "r", encoding="utf-8") as f:
@@ -48,15 +47,12 @@ def format_prompt(instruction: str, inp: str) -> str:
     return f"Instruction: {instruction}\nAnswer:"
 
 
-def safe_decode(tokenizer, ids) -> str:
-    # Replace -100 with pad token id for decoding labels
-    ids = [t if t != -100 else tokenizer.pad_token_id for t in ids]
-    return tokenizer.decode(ids, skip_special_tokens=True).strip()
-
-
+# -----------------------------
+# Plotting
+# -----------------------------
 def plot_trainer_logs(output_dir: str):
     """
-    Reads trainer_state.json and plots train/eval loss and ROUGE-L if available.
+    Reads trainer_state.json and plots train/eval loss.
     Saves PNGs in output_dir.
     """
     state_path = os.path.join(output_dir, "trainer_state.json")
@@ -68,11 +64,8 @@ def plot_trainer_logs(output_dir: str):
         state = json.load(f)
 
     history = state.get("log_history", [])
-    steps = []
-    train_loss = []
-    eval_steps = []
-    eval_loss = []
-    rougeL = []
+    steps, train_loss = [], []
+    eval_steps, eval_loss = [], []
 
     for item in history:
         if "loss" in item and "step" in item and "eval_loss" not in item:
@@ -81,17 +74,14 @@ def plot_trainer_logs(output_dir: str):
         if "eval_loss" in item and "step" in item:
             eval_steps.append(item["step"])
             eval_loss.append(item["eval_loss"])
-            # metric name depends on evaluate output; we'll store rougeL if present
-            if "eval_rougeL" in item:
-                rougeL.append((item["step"], item["eval_rougeL"]))
 
-    # Plot loss curves
     if steps and train_loss:
         plt.figure()
         plt.plot(steps, train_loss)
         plt.xlabel("Step")
         plt.ylabel("Train Loss")
         plt.title("Training Loss")
+        plt.grid(True)
         plt.savefig(os.path.join(output_dir, "train_loss.png"), dpi=160)
         plt.close()
 
@@ -100,23 +90,59 @@ def plot_trainer_logs(output_dir: str):
         plt.plot(eval_steps, eval_loss)
         plt.xlabel("Step")
         plt.ylabel("Eval Loss")
-        plt.title("Evaluation Loss")
+        plt.title("Validation Loss")
+        plt.grid(True)
         plt.savefig(os.path.join(output_dir, "eval_loss.png"), dpi=160)
         plt.close()
 
-    # Plot ROUGE-L if available
-    if rougeL:
-        xs = [s for s, v in rougeL]
-        ys = [v for s, v in rougeL]
-        plt.figure()
-        plt.plot(xs, ys)
-        plt.xlabel("Step")
-        plt.ylabel("ROUGE-L")
-        plt.title("ROUGE-L over training")
-        plt.savefig(os.path.join(output_dir, "rougeL.png"), dpi=160)
-        plt.close()
+
+# -----------------------------
+# Helpers (optional, but kept)
+# -----------------------------
+def get_final_train_loss(output_dir: str):
+    """
+    Tries to read final training loss from trainer_state.json.
+    This may be missing if HF didn't write it, so we also compute
+    from train_result.metrics in main().
+    """
+    state_path = os.path.join(output_dir, "trainer_state.json")
+    if not os.path.exists(state_path):
+        return None
+
+    with open(state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    losses = [
+        item["loss"]
+        for item in state.get("log_history", [])
+        if "loss" in item and "eval_loss" not in item
+    ]
+    return losses[-1] if losses else None
 
 
+def get_last_learning_rate(output_dir: str):
+    """
+    Tries to read last learning_rate from trainer_state.json.
+    We also compute from trainer.state.log_history in main().
+    """
+    state_path = os.path.join(output_dir, "trainer_state.json")
+    if not os.path.exists(state_path):
+        return None
+
+    with open(state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    lrs = [
+        item["learning_rate"]
+        for item in state.get("log_history", [])
+        if "learning_rate" in item
+    ]
+    return lrs[-1] if lrs else None
+
+
+# -----------------------------
+# Main
+# -----------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to YAML config")
@@ -137,8 +163,10 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # -----------------------------
+    # Model & Tokenizer
+    # -----------------------------
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-
     model = AutoModelForSeq2SeqLM.from_pretrained(base_model)
 
     if train_cfg.get("gradient_checkpointing", False):
@@ -156,7 +184,13 @@ def main():
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
-    ds = load_dataset("json", data_files={"train": train_file, "validation": eval_file})
+    # -----------------------------
+    # Dataset
+    # -----------------------------
+    ds = load_dataset(
+        "json",
+        data_files={"train": train_file, "validation": eval_file},
+    )
 
     ins_k = fmt["instruction_key"]
     in_k = fmt["input_key"]
@@ -165,58 +199,65 @@ def main():
     max_src = int(train_cfg["max_source_length"])
     max_tgt = int(train_cfg["max_target_length"])
 
+    # ✅ FIX #1: Proper label masking (-100 for pad tokens)
     def preprocess(batch):
         prompts = [format_prompt(i, x) for i, x in zip(batch[ins_k], batch[in_k])]
         targets = [(t or "").strip() for t in batch[out_k]]
 
-        model_inputs = tokenizer(prompts, max_length=max_src, truncation=True)
-        labels = tokenizer(text_target=targets, max_length=max_tgt, truncation=True)
-        model_inputs["labels"] = labels["input_ids"]
+        model_inputs = tokenizer(
+            prompts,
+            max_length=max_src,
+            truncation=True,
+            padding="max_length",
+        )
+
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(
+                targets,
+                max_length=max_tgt,
+                truncation=True,
+                padding="max_length",
+            )
+
+        labels_ids = labels["input_ids"]
+        labels_ids = [
+            [(tok if tok != tokenizer.pad_token_id else -100) for tok in seq]
+            for seq in labels_ids
+        ]
+
+        model_inputs["labels"] = labels_ids
         return model_inputs
 
-    tokenized = ds.map(preprocess, batched=True, remove_columns=ds["train"].column_names)
+    tokenized = ds.map(
+        preprocess,
+        batched=True,
+        remove_columns=ds["train"].column_names,
+    )
 
+    # -----------------------------
+    # ✅ CRITICAL SANITY CHECK
+    # -----------------------------
+    print("DEBUG labels sample:", tokenized["train"][0]["labels"][:20])
+
+    # Must have at least some real tokens (not all -100)
+    if all(x == -100 for x in tokenized["train"][0]["labels"]):
+        raise ValueError("❌ Labels are all -100. Tokenization is broken.")
+
+    # -----------------------------
+    # Data collator
+    # -----------------------------
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
-        pad_to_multiple_of=8 if train_cfg.get("fp16", False) else None,
+        pad_to_multiple_of=None,  # fp16 OFF
     )
 
-    # Metrics for generation
-    rouge = evaluate.load("rouge")
-
-    def compute_metrics(eval_preds):
-        preds, labels = eval_preds
-        # preds may be tuple in some versions
-        if isinstance(preds, tuple):
-            preds = preds[0]
-
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = [safe_decode(tokenizer, lab) for lab in labels]
-
-        decoded_preds = [p.strip() for p in decoded_preds]
-        decoded_labels = [l.strip() for l in decoded_labels]
-
-        # Exact match (strict)
-        em = np.mean([1.0 if p == l else 0.0 for p, l in zip(decoded_preds, decoded_labels)])
-
-        # ROUGE
-        rouge_scores = rouge.compute(
-            predictions=decoded_preds,
-            references=decoded_labels,
-            use_stemmer=False
-        )
-
-        return {
-            "exact_match": float(em),
-            "rouge1": float(rouge_scores["rouge1"]),
-            "rouge2": float(rouge_scores["rouge2"]),
-            "rougeL": float(rouge_scores["rougeL"]),
-        }
-
+    # -----------------------------
+    # TrainingArguments
+    # -----------------------------
     training_args = TrainingArguments(
         output_dir=output_dir,
-        overwrite_output_dir=False,
+        overwrite_output_dir=True,
 
         max_steps=int(train_cfg["max_steps"]),
         per_device_train_batch_size=int(train_cfg["per_device_train_batch_size"]),
@@ -229,19 +270,20 @@ def main():
         max_grad_norm=float(train_cfg["max_grad_norm"]),
 
         logging_steps=int(train_cfg["logging_steps"]),
-        evaluation_strategy="steps",
+
+        # ✅ Transformers version uses eval_strategy (not evaluation_strategy)
+        eval_strategy="steps",
         eval_steps=int(train_cfg["eval_steps"]),
+
         save_strategy="steps",
         save_steps=int(train_cfg["save_steps"]),
         save_total_limit=int(train_cfg["save_total_limit"]),
 
-        fp16=bool(train_cfg.get("fp16", False)),
-        bf16=bool(train_cfg.get("bf16", False)),
+        prediction_loss_only=True,
+        eval_accumulation_steps=int(train_cfg.get("eval_accumulation_steps", 8)),
 
-        # Generation during eval (important for metrics)
-        predict_with_generate=bool(train_cfg.get("predict_with_generate", True)),
-        generation_max_length=int(train_cfg["max_target_length"]),
-        generation_num_beams=int(train_cfg.get("num_beams", 2)),
+        fp16=bool(train_cfg.get("fp16", False)),
+        bf16=bool(train_cfg.get("bf16", False)) if "bf16" in train_cfg else False,
 
         report_to="none",
         remove_unused_columns=False,
@@ -254,35 +296,85 @@ def main():
         eval_dataset=tokenized["validation"],
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        compute_metrics=None,
     )
 
+    # Resume optional (your YAML sets false)
     resume = None
     if train_cfg.get("resume_from_checkpoint", False):
         resume = find_latest_checkpoint(output_dir)
 
-    trainer.train(resume_from_checkpoint=resume)
+    # ✅ FIX #2: Capture train_result metrics reliably
+    train_result = trainer.train(resume_from_checkpoint=resume)
 
-    # Final eval
+    # Final eval (loss-only)
     metrics = trainer.evaluate()
-    print("\n✅ Final eval metrics:")
-    for k, v in metrics.items():
-        print(f"{k}: {v}")
 
+    # -----------------------------
+    # ✅ Final Summary (always prints)
+    # -----------------------------
+    final_eval_loss = metrics.get("eval_loss")
+    final_train_loss = train_result.metrics.get("train_loss")
+
+    # Learning rate (from trainer history)
+    final_lr = None
+    for item in reversed(trainer.state.log_history):
+        if "learning_rate" in item:
+            final_lr = item["learning_rate"]
+            break
+
+    epochs_completed = trainer.state.epoch if trainer.state.epoch is not None else 0.0
+    total_steps = trainer.state.global_step
+    effective_batch_size = (
+        training_args.per_device_train_batch_size
+        * training_args.gradient_accumulation_steps
+    )
+
+    print("\n================ FINAL TRAINING SUMMARY ================")
+    print(f"Epochs completed        : {epochs_completed:.2f}")
+    print(f"Total training steps    : {total_steps}")
+    print(f"Effective batch size    : {effective_batch_size}")
+
+    if final_lr is not None:
+        print(f"Learning rate           : {final_lr:.2e}")
+    else:
+        print("Learning rate           : Not available")
+
+    if final_train_loss is not None:
+        print(f"Training loss           : {final_train_loss:.4f}")
+    else:
+        print("Training loss           : Not available")
+
+    if final_eval_loss is not None:
+        print(f"Validation loss         : {final_eval_loss:.4f}")
+    else:
+        print("Validation loss         : Not available")
+
+    print("=======================================================")
+
+    # -----------------------------
     # Save LoRA adapter + tokenizer
+    # -----------------------------
     trainer.model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
+    # -----------------------------
     # Save a few predictions for inspection
+    # -----------------------------
     preds_out = os.path.join(output_dir, "val_predictions.jsonl")
     val_raw = ds["validation"]
 
-    # Generate on a small sample to keep it fast
     n = min(50, len(val_raw))
     sample = val_raw.select(range(n))
 
     prompts = [format_prompt(sample[i][ins_k], sample[i][in_k]) for i in range(n)]
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=max_src).to(trainer.model.device)
+    inputs = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=max_src,
+    ).to(trainer.model.device)
 
     gen = trainer.model.generate(
         **inputs,
@@ -301,14 +393,14 @@ def main():
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    # Plot graphs from trainer logs
+    # Plots
     plot_trainer_logs(output_dir)
 
     print(f"\n✅ Training done. Saved to: {output_dir}")
     print(f"✅ Predictions saved: {preds_out}")
-    print("✅ Plots saved: train_loss.png, eval_loss.png, rougeL.png (if available)")
+    print("✅ Plots saved: train_loss.png, eval_loss.png")
     if resume:
-        print(f"Resumed from: {resume}")
+        print(f"✅ Resumed from: {resume}")
 
 
 if __name__ == "__main__":
