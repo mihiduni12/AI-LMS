@@ -24,6 +24,11 @@ Automatically generate customized physics assessment papers tailored to your cur
 - **For Teachers:** Design assessments aligned with learning objectives
 - **For Admins:** Manage institution-wide paper generation and distribution
 
+### 4. **AI Learning Assistant** 🤖
+Your personal AI tutor available 24/7. Interactive conversations to explain complex physics concepts, answer questions, and provide personalized learning recommendations.
+- **For Students:** Access instant explanations and conceptual clarity anytime
+- **For Teachers:** Supplement classroom instruction with AI-powered tutoring support
+
 ## 🎯 Who Can Benefit?
 
 - **👨‍🎓 Students** - Learn physics interactively with AI support
